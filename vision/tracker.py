@@ -24,13 +24,13 @@ except serial.SerialException:
 delta_queue = Queue()
 
 def serial_writer():
-    """Send latest delta_x or command to Arduino asynchronously."""
+    """Send latest deltaX or stop command to Arduino asynchronously."""
     global arduino
     while True:
         if not delta_queue.empty() and arduino:
-            value = delta_queue.get()
+            dx = delta_queue.get()
             try:
-                arduino.write(f"{value}\n".encode())
+                arduino.write(f"{dx}\n".encode())
             except serial.SerialException:
                 print("⚠️ Serial write failed. Closing port.")
                 arduino.close()
@@ -52,21 +52,17 @@ cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 cap.set(cv2.CAP_PROP_FPS, 30)
 
 if not cap.isOpened():
-    print("❌ Camera not available — stopping chair.")
+    print("❌ Cannot open webcam")
     if arduino:
-        delta_queue.put(9999)
+        delta_queue.put(9999)  # stop signal
     exit()
 
 cv2.namedWindow("MediaPipe Chair Tracker", cv2.WINDOW_NORMAL)
 cv2.moveWindow("MediaPipe Chair Tracker", 100, 100)
 
-# ---------------- Command Codes ----------------
-COMMAND_STOP = 0
-COMMAND_SCAN = 2
-COMMAND_TRACK = 1  # optional, just for clarity
-
 # ---------------- Global Command ----------------
-current_command = "stop"  # default; will be updated via WebSocket
+current_command = "stop"  # default: chair stopped
+COMMAND_STOP = 9999       # Arduino stop sentinel
 
 # ---------------- WebSocket Server ----------------
 async def ws_handler(websocket):
@@ -79,11 +75,10 @@ async def ws_handler(websocket):
             print("❌ Unknown command:", message)
 
 async def ws_server():
-    async with websockets.serve(ws_handler, "0.0.0.0", 8765):
+    async with websockets.serve(ws_handler, "127.0.0.1", 8765):
         print("🌐 WebSocket server started on port 8765")
         await asyncio.Future()  # run forever
 
-# Run WebSocket server in background thread
 def start_ws():
     asyncio.run(ws_server())
 
@@ -99,27 +94,19 @@ while True:
     cross_x = width // 2
     cross_y = height // 2
 
-    command_to_send = None
-    delta_x = 9999  # default stop value
+    # Default delta_x: stop
+    delta_x = COMMAND_STOP
+    torso_points = []
 
-    if current_command == "stop":
-        command_to_send = COMMAND_STOP
-
-    elif current_command == "scan":
-        # simple scanning placeholder (e.g., rotate in place)
-        command_to_send = COMMAND_SCAN
-
-    elif current_command == "track":
-        # MediaPipe tracking
+    # Only track if UI command is 'track'
+    if current_command == "track":
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         try:
             results = pose.process(rgb_frame)
         except Exception as e:
             print("MediaPipe error:", e)
-            command_to_send = COMMAND_STOP
+            delta_x = COMMAND_STOP
         else:
-            torso_points = []
-
             if results.pose_landmarks:
                 landmarks = results.pose_landmarks.landmark
                 torso_indices = [
@@ -128,58 +115,46 @@ while True:
                     mp_pose.PoseLandmark.LEFT_SHOULDER,
                     mp_pose.PoseLandmark.RIGHT_SHOULDER
                 ]
-
                 for idx in torso_indices:
                     lm = landmarks[idx]
                     if lm.visibility > 0.5:
                         x_px = int(lm.x * width)
-                        torso_points.append(x_px)
+                        y_px = int(lm.y * height)
+                        torso_points.append((x_px, y_px))
 
                 if torso_points:
-                    com_x = int(np.mean(torso_points))
+                    com_x = int(np.mean([p[0] for p in torso_points]))
                     delta_x = com_x - cross_x
+                else:
+                    delta_x = COMMAND_STOP
+            else:
+                delta_x = COMMAND_STOP
 
-            command_to_send = delta_x
-
-    # ---------------- Send to Arduino ----------------
-    if arduino is not None and command_to_send is not None:
+    # Only send to Arduino if command is track or scan (UI controlled)
+    if arduino is not None:
         while not delta_queue.empty():
             delta_queue.get_nowait()
-        delta_queue.put(command_to_send)
+        delta_queue.put(delta_x)
 
     # ---------------- Display ----------------
-    display_frame = cv2.flip(frame, 1)  # visual mirror
+    display_frame = frame.copy()
     cv2.drawMarker(display_frame, (cross_x, cross_y), (0, 0, 255),
                    markerType=cv2.MARKER_CROSS, markerSize=20, thickness=2)
 
-    # Draw torso points and COM
-    if current_command == "track" and results.pose_landmarks:
-        for idx in torso_indices:
-            lm = results.pose_landmarks.landmark[idx]
-            if lm.visibility > 0.5:
-                x_px = int(lm.x * width)
-                y_px = int(lm.y * height)
-                cv2.circle(display_frame, (width - x_px, y_px), 5, (0, 255, 0), -1)
-        if torso_points:
-            cv2.circle(display_frame, (width - com_x, height // 2), 8, (255, 0, 0), -1)
+    if torso_points:
+        for (x, y) in torso_points:
+            cv2.circle(display_frame, (x, y), 5, (0, 255, 0), -1)
+        cv2.circle(display_frame, (com_x, int(height/2)), 8, (255, 0, 0), -1)
 
-    # Display delta or command
-    if command_to_send == COMMAND_STOP:
-        text = "STOP"
-        color = (0, 0, 255)
-    elif command_to_send == COMMAND_SCAN:
-        text = "SCAN"
-        color = (0, 255, 255)
-    else:
-        text = f"Delta X: {command_to_send}"
-        color = (255, 255, 255)
-
-    cv2.putText(display_frame, text, (10, 40),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+    text = "Stopped" if delta_x == COMMAND_STOP else f"deltaX = {delta_x}"
+    color = (0, 0, 255) if delta_x == COMMAND_STOP else (255, 255, 255)
+    cv2.putText(display_frame, text, (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 
     cv2.imshow("MediaPipe Chair Tracker", display_frame)
 
     if cv2.waitKey(1) & 0xFF == 27:
+        if arduino:
+            delta_queue.put(COMMAND_STOP)
         break
 
 # ---------------- Cleanup ----------------
