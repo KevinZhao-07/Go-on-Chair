@@ -7,33 +7,32 @@ import time
 # ---------------- Arduino Setup ----------------
 arduino = None
 try:
-    arduino = serial.Serial('COM7', 115200, timeout=1)  # fast baud
+    arduino = serial.Serial('COM7', 115200, timeout=1)
     time.sleep(2)  # wait for Arduino to initialize
     print("✅ Arduino connected.")
 except serial.SerialException:
     print("⚠️ Arduino not connected. Continuing without serial...")
+
+# ---------------- MediaPipe Setup ----------------
+mp_pose = mp.solutions.pose
+pose = mp_pose.Pose(
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5
+)
 
 # ---------------- Webcam Setup ----------------
 cap = cv2.VideoCapture(1)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 cap.set(cv2.CAP_PROP_FPS, 30)
-cap.set(cv2.CAP_PROP_ZOOM, 0)   # max FOV
-cap.set(cv2.CAP_PROP_FOCUS, 0)  # fixed focus for consistency
+# Optional, might not be implemented
+cap.set(cv2.CAP_PROP_ZOOM, 0)
+cap.set(cv2.CAP_PROP_FOCUS, 0)
 
-# Pre-warm camera (grab and discard a few frames)
-for _ in range(5):
-    ret, frame = cap.read()
-    if not ret:
-        print("❌ Failed to pre-warm camera")
-        break
+if not cap.isOpened():
+    print("❌ Cannot open webcam")
+    exit()
 
-# ---------------- MediaPipe Setup ----------------
-mp_pose = mp.solutions.pose
-pose = mp_pose.Pose(min_detection_confidence=0.5,
-                    min_tracking_confidence=0.5)
-
-# ---------------- Display Setup ----------------
 cv2.namedWindow("MediaPipe Chair Tracker", cv2.WINDOW_NORMAL)
 cv2.moveWindow("MediaPipe Chair Tracker", 100, 100)
 
@@ -41,14 +40,14 @@ cv2.moveWindow("MediaPipe Chair Tracker", 100, 100)
 while True:
     ret, frame = cap.read()
     if not ret:
-        print("❌ Failed to grab frame.")
+        print("Failed to grab frame.")
         break
 
     height, width, _ = frame.shape
     cross_x = width // 2
     cross_y = height // 2
 
-    # Convert to RGB for MediaPipe
+    # Convert to RGB (MediaPipe uses RGB)
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = pose.process(rgb_frame)
 
@@ -57,7 +56,7 @@ while True:
     if results.pose_landmarks:
         landmarks = results.pose_landmarks.landmark
 
-        # Torso points for stability
+        # Use torso points for stability
         torso_indices = [
             mp_pose.PoseLandmark.LEFT_HIP,
             mp_pose.PoseLandmark.RIGHT_HIP,

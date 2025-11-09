@@ -8,7 +8,6 @@ const int rightReverse = 5;
 const int MAX_SPEED = 150;
 const float kP = 0.167;            // proportional gain for X-centering
 const int DEFAULT_FORWARD = 67;    // default forward speed
-const int DEADZONE = 10;           // pixels
 
 // -------------------- Motor state --------------------
 int currentLeft  = 0;
@@ -41,11 +40,11 @@ void updateMotors() {
   if(now - lastRampTime >= rampInterval){
     lastRampTime = now;
 
-    if(currentLeft < targetLeft) currentLeft++;
-    else if(currentLeft > targetLeft) currentLeft--;
+    if(currentLeft < targetLeft) currentLeft+= 5;
+    else if(currentLeft > targetLeft) currentLeft-= 5;
 
-    if(currentRight < targetRight) currentRight++;
-    else if(currentRight > targetRight) currentRight--;
+    if(currentRight < targetRight) currentRight+= 5;
+    else if(currentRight > targetRight) currentRight-= 5;
 
     setMotorPWM(leftForward, leftReverse, currentLeft);
     setMotorPWM(rightForward, rightReverse, currentRight);
@@ -68,13 +67,6 @@ void setMotorPWM(int forwardPin, int reversePin, int speed){
 void track(int deltaX) {
   Serial.print("Received deltaX: ");
   Serial.println(deltaX);
-
-  // Deadzone
-  if(abs(deltaX) < DEADZONE) {
-    targetLeft  = DEFAULT_FORWARD;
-    targetRight = DEFAULT_FORWARD;
-    return;
-  }
 
   int adjustment = int(kP * deltaX);
   targetLeft  = constrain(DEFAULT_FORWARD + adjustment, -MAX_SPEED, MAX_SPEED);
