@@ -10,28 +10,25 @@ interface ParticleEffectProps {
 }
 
 export function ParticleEffect({ id, x, y, onComplete }: ParticleEffectProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const particlesContainerRef = useRef<HTMLDivElement>(null); // Renamed for clarity
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const particlesRef = useRef<HTMLDivElement[]>([]);
+  const particleElementsRef = useRef<HTMLDivElement[]>([]); // Renamed for clarity
   const mountedRef = useRef(true);
 
   useEffect(() => {
     mountedRef.current = true;
-    const container = containerRef.current;
+    const container = particlesContainerRef.current; // Use the new ref
     if (!container) return;
 
-    // Clear any existing particles in this container first
-    while (container.firstChild) {
-      container.removeChild(container.firstChild);
-    }
-    particlesRef.current = [];
+    // No longer clearing children here, as each ParticleEffect instance is independent.
+    particleElementsRef.current = [];
 
     const particleCount = 20 + Math.floor(Math.random() * 20); // Randomize particle count
-    const particles: HTMLDivElement[] = [];
+    const newParticleElements: HTMLDivElement[] = []; // Renamed for clarity
 
     const cleanup = () => {
       if (!mountedRef.current) return;
-      particlesRef.current.forEach(particle => {
+      particleElementsRef.current.forEach(particle => {
         try {
           if (particle && particle.parentNode) {
             particle.parentNode.removeChild(particle);
@@ -40,7 +37,7 @@ export function ParticleEffect({ id, x, y, onComplete }: ParticleEffectProps) {
           // Ignore cleanup errors
         }
       });
-      particlesRef.current = [];
+      particleElementsRef.current = [];
     };
 
     try {
@@ -56,7 +53,7 @@ export function ParticleEffect({ id, x, y, onComplete }: ParticleEffectProps) {
         const randomDelay = Math.random() * 0.2; // Shorter delay
         const duration = 0.8 + Math.random() * 0.8; // Random duration
         
-        particle.style.position = "fixed";
+        particle.style.position = "absolute"; // Changed to absolute relative to its container
         particle.style.left = `${x}px`;
         particle.style.top = `${y}px`;
         particle.style.setProperty("--tx", `${tx}px`);
@@ -70,10 +67,10 @@ export function ParticleEffect({ id, x, y, onComplete }: ParticleEffectProps) {
         particle.style.zIndex = "50";
         
         container.appendChild(particle);
-        particles.push(particle);
+        newParticleElements.push(particle);
       }
 
-      particlesRef.current = particles;
+      particleElementsRef.current = newParticleElements;
 
       timeoutRef.current = setTimeout(() => {
         if (mountedRef.current) {
@@ -99,6 +96,6 @@ export function ParticleEffect({ id, x, y, onComplete }: ParticleEffectProps) {
     };
   }, [x, y, onComplete, id]);
 
-  return <div ref={containerRef} className="fixed inset-0 pointer-events-none z-50" style={{ left: 0, top: 0, width: "100%", height: "100%" }} data-particle-container={id} />;
+  return <div ref={particlesContainerRef} className="fixed inset-0 pointer-events-none z-50" data-particle-container={id} />;
 }
 
