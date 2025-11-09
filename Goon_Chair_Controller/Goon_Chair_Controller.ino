@@ -6,19 +6,16 @@ const int rightReverse  = 5;
 
 // -------------------- Constants --------------------
 const int MAX_SPEED = 150;
-const int DEFAULT_FORWARD = 100;   // target forward speed
-const float Kp = 0.167;             // proportional gain for deltaX
-const int rampStep = 5;           // step for forward speed ramping
+const int DEFAULT_FORWARD = 100;
+const float Kp = 0.167;
+const int rampStep = 5;
 
 // -------------------- Motor state --------------------
-int currentLeft   = 0;
-int currentRight  = 0;
-int targetLeft    = 0;
-int targetRight   = 0;
-int defaultForward = 0;           // ramps toward DEFAULT_FORWARD
+int defaultForward = 0;
+int targetLeft = 0;
+int targetRight = 0;
 
 // -------------------- PID state --------------------
-float integral = 0;
 int lastError = 0;
 
 // -------------------- Serial Buffer --------------------
@@ -29,116 +26,112 @@ int bufferIndex = 0;
 // -------------------- Ultrasonic --------------------
 const int trigPin = 4;
 const int echoPin = 3;
-int stableCount = 0;            // counts cycles in good range
-const int stableThreshold = 5;  // stop after 5 cycles
-const int minDistance = 20;     // cm
-const int maxDistance = 40;     // cm
+int stableCount = 0;
+const int stableThreshold = 5;   // stop after 3 stable readings
+const float stopMin = 40.0;
+const float stopMax = 55.0;
 
 // -------------------- Setup --------------------
 void setup() {
-    pinMode(leftForward, OUTPUT);
-    pinMode(leftReverse, OUTPUT);
-    pinMode(rightForward, OUTPUT);
-    pinMode(rightReverse, OUTPUT);
+  pinMode(leftForward, OUTPUT);
+  pinMode(leftReverse, OUTPUT);
+  pinMode(rightForward, OUTPUT);
+  pinMode(rightReverse, OUTPUT);
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
 
-    pinMode(trigPin, OUTPUT);
-    pinMode(echoPin, INPUT);
-
-    analogWrite(leftForward, 0);
-    analogWrite(leftReverse, 0);
-    analogWrite(rightForward, 0);
-    analogWrite(rightReverse, 0);
-
-    Serial.begin(115200);  // must match Python baud
-    Serial.println("Arduino ready for deltaX input (PID + ramp).");
+  Serial.begin(115200);
+  Serial.println("✅ Arduino ready: PID + safety stop + ultrasonic check");
 }
 
 // -------------------- Motor helper --------------------
 void setMotorPWM(int forwardPin, int reversePin, int speed) {
-    speed = constrain(speed, -MAX_SPEED, MAX_SPEED);
-    if(speed >= 0) {
-        analogWrite(forwardPin, speed);
-        analogWrite(reversePin, 0);
-    } else {
-        analogWrite(forwardPin, 0);
-        analogWrite(reversePin, -speed);
-    }
+  speed = constrain(speed, -MAX_SPEED, MAX_SPEED);
+  if (speed >= 0) {
+    analogWrite(forwardPin, speed);
+    analogWrite(reversePin, 0);
+  } else {
+    analogWrite(forwardPin, 0);
+    analogWrite(reversePin, -speed);
+  }
 }
 
-// -------------------- PID + ramp function --------------------
-void updateMotorsPID(int deltaX, bool stopMotors) {
-    if(stopMotors) {
-        // Stop motors
-        setMotorPWM(leftForward, leftReverse, 0);
-        setMotorPWM(rightForward, rightReverse, 0);
-        Serial.println("Chair stopped: stable distance detected.");
-        return;
-    }
+// -------------------- Stop helper --------------------
+void stopMotors(const char* reason) {
+  setMotorPWM(leftForward, leftReverse, 0);
+  setMotorPWM(rightForward, rightReverse, 0);
+  Serial.print("🛑 STOP: ");
+  Serial.println(reason);
+}
 
-    // Ramp default forward speed toward DEFAULT_FORWARD
-    if(defaultForward < DEFAULT_FORWARD) defaultForward += rampStep;
-    else if(defaultForward > DEFAULT_FORWARD) defaultForward -= rampStep;
+// -------------------- Ultrasonic distance --------------------
+float getDistance() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  long duration = pulseIn(echoPin, HIGH, 30000); // timeout 30ms
+  return duration * 0.0343 / 2.0; // cm
+}
 
-    // PID for deltaX
-    float error = deltaX;
-    integral += error;
-    float derivative = error - lastError;
-    int correction = int(Kp * error); // + Ki * integral + Kd * derivative);
-    lastError = error;
+// -------------------- Main control --------------------
+void updateMotorsPID(int deltaX, bool stopMotorsFlag) {
+  if (stopMotorsFlag) {
+    stopMotors("Sensor condition");
+    return;
+  }
 
-    // Apply speeds
-    targetLeft  = constrain(defaultForward + correction, -MAX_SPEED, MAX_SPEED);
-    targetRight = constrain(defaultForward - correction, -MAX_SPEED, MAX_SPEED);
+  // Ramp default forward speed toward DEFAULT_FORWARD
+  if (defaultForward < DEFAULT_FORWARD) defaultForward += rampStep;
+  else if (defaultForward > DEFAULT_FORWARD) defaultForward -= rampStep;
 
-    setMotorPWM(leftForward, leftReverse, targetLeft);
-    setMotorPWM(rightForward, rightReverse, targetRight);
+  // Simple proportional control
+  int correction = int(Kp * deltaX);
+  targetLeft  = constrain(defaultForward + correction, -MAX_SPEED, MAX_SPEED);
+  targetRight = constrain(defaultForward - correction, -MAX_SPEED, MAX_SPEED);
 
-    // Debugging output
-    Serial.print("deltaX: "); Serial.print(deltaX);
-    Serial.print(" | targetL: "); Serial.print(targetLeft);
-    Serial.print(" | targetR: "); Serial.println(targetRight);
+  setMotorPWM(leftForward, leftReverse, targetLeft);
+  setMotorPWM(rightForward, rightReverse, targetRight);
 }
 
 // -------------------- Serial reading --------------------
 void readSerial() {
-    while(Serial.available()) {
-        char incomingChar = Serial.read();
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n') {
+      serialBuffer[bufferIndex] = '\0';
+      if (bufferIndex > 0) {
+        int deltaX = atoi(serialBuffer);
+        bufferIndex = 0;
 
-        if(incomingChar == '\n') {
-            serialBuffer[bufferIndex] = '\0';
-            if(bufferIndex > 0) {
-                int deltaX = atoi(serialBuffer);
-
-                // Read ultrasonic
-                long duration;
-                float distance;
-                digitalWrite(trigPin, LOW);
-                delayMicroseconds(2);
-                digitalWrite(trigPin, HIGH);
-                delayMicroseconds(10);
-                digitalWrite(trigPin, LOW);
-
-                duration = pulseIn(echoPin, HIGH, 30000); // 30ms timeout
-                distance = duration * 0.0343 / 2; // cm
-
-                bool stopChair = false;
-                if(distance >= minDistance && distance <= maxDistance) {
-                    stableCount++;
-                    if(stableCount >= stableThreshold) stopChair = true;
-                } else {
-                    stableCount = 0; // reset if out of range
-                }
-
-                updateMotorsPID(deltaX, stopChair);
-            }
-            bufferIndex = 0;
-        } else if(bufferIndex < MAX_SERIAL_LENGTH - 1) {
-            serialBuffer[bufferIndex++] = incomingChar;
+        // Condition 1: Python tells us no person / camera issue
+        if (deltaX == 9999) {
+          stopMotors("No person or camera error");
+          return;
         }
+
+        // Condition 2: Ultrasonic safety stop
+        float distance = getDistance();
+        bool stopUltrasonic = false;
+        if (distance >= stopMin && distance <= stopMax) {
+          stableCount++;
+          if (stableCount >= stableThreshold) stopUltrasonic = true;
+        } else {
+          stableCount = 0;
+        }
+
+        // Update motors or stop
+        updateMotorsPID(deltaX, stopUltrasonic);
+      } else {
+        bufferIndex = 0;
+      }
+    } else if (bufferIndex < MAX_SERIAL_LENGTH - 1) {
+      serialBuffer[bufferIndex++] = c;
     }
+  }
 }
 
-// -------------------- Main loop --------------------
 void loop() {
-    readSerial();
+  readSerial();
 }
