@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { CustomCursor } from "@/components/CustomCursor";
 import { ParticleEffect } from "@/components/ParticleEffect";
+import { SoundButton } from "@/components/SoundButton";
 import { ControlButton } from "@/components/ControlButton";
 
 interface Particle {
@@ -15,120 +16,93 @@ export default function Home() {
   const [particles, setParticles] = useState<Particle[]>([]);
   const [trackPersonActive, setTrackPersonActive] = useState(false);
   const [gooningMachineActive, setGooningMachineActive] = useState(false);
-  const [findPersonActive, setFindPersonActive] = useState(false);
   const particleIdRef = useRef(0);
 
+  const wsRef = useRef<WebSocket | null>(null);
 
+  // ---------------- WebSocket Setup ----------------
+  useEffect(() => {
+    wsRef.current = new WebSocket("ws://localhost:8765"); // make sure Python WS server is running
 
-  const handleButtonClick = useCallback((e: React.MouseEvent<HTMLElement>) => {
-    try {
-      // Capture coordinates immediately
-      const rect = e.currentTarget.getBoundingClientRect();
-      const x = rect.left + rect.width / 2;
-      const y = rect.top + rect.height / 2;
+    wsRef.current.onopen = () => console.log("✅ WebSocket connected");
+    wsRef.current.onclose = () => console.log("⚠️ WebSocket disconnected");
+    wsRef.current.onerror = (err) => console.error("WebSocket error:", err);
+    wsRef.current.onmessage = (msg) => console.log("Message from Python:", msg.data);
 
-      // Clear all existing particles first
-      setParticles([]);
-      
-      // Use setTimeout to ensure cleanup completes before new animation starts
-      setTimeout(() => {
-        particleIdRef.current += 1;
-        const id = particleIdRef.current;
-        // Start new particle animation
-        setParticles([{ id, x, y }]);
-      }, 0);
-    } catch (error) {
-      console.error("Error handling button click:", error);
+    return () => {
+      wsRef.current?.close();
+    };
+  }, []);
+
+  const sendCommand = useCallback((command: string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(command);
+      console.log("Sent command:", command);
+    } else {
+      console.warn("WebSocket not connected, cannot send:", command);
     }
+  }, []);
+
+  // ---------------- Particle Effects ----------------
+  const handleButtonClick = useCallback((e: React.MouseEvent<HTMLElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    setParticles([{ id: ++particleIdRef.current, x, y }]);
   }, []);
 
   const handleParticleComplete = useCallback((id: number) => {
     setParticles((prev) => prev.filter((p) => p.id !== id));
   }, []);
 
+  // ---------------- Control Handlers ----------------
+  const handleStop = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    handleButtonClick(e);
+    sendCommand("stop");
+    setTrackPersonActive(false);
+    setGooningMachineActive(false);
+  }, [handleButtonClick, sendCommand]);
+
   const handleTrackPerson = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     handleButtonClick(e);
+    sendCommand("track");
     setTrackPersonActive((prev) => !prev);
-  }, [handleButtonClick]);
+    setGooningMachineActive(false);
+  }, [handleButtonClick, sendCommand]);
 
   const handleGooningMachine = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     handleButtonClick(e);
+    sendCommand("scan");
     setGooningMachineActive((prev) => !prev);
-  }, [handleButtonClick]);
+    setTrackPersonActive(false);
+  }, [handleButtonClick, sendCommand]);
 
-  const handleFindPerson = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    handleButtonClick(e);
-    setFindPersonActive((prev) => !prev);
-  }, [handleButtonClick]);
-
-  // New handler for sending movement commands
-  const handleMove = useCallback(async (direction: string) => {
-    console.log(`Sending command: ${direction}`);
-    try {
-      const response = await fetch(`/api/chair/${direction}`, {
-        method: 'POST',
-      });
-      const result = await response.json();
-      if (result.status === 'error') {
-        console.error(`Error from chair server: ${result.message}`);
-      } else {
-        console.log(`Chair server response:`, result);
-      }
-    } catch (error) {
-      console.error('Failed to send command to Next.js API route:', error);
-    }
-  }, []);
-
-
+  // ---------------- Render ----------------
   return (
     <main className="custom-cursor min-h-screen relative overflow-hidden bg-black">
       <CustomCursor />
-      
-      {/* YouTube Background */}
-      <div className="absolute top-0 left-0 w-full h-full z-0 overflow-hidden">
-        <iframe
-          className="absolute top-1/2 left-1/2 w-full h-full -translate-x-1/2 -translate-y-1/2"
-          src="https://www.youtube.com/embed/5vfaDsMhCF4?autoplay=1&mute=1&loop=1&playlist=5vfaDsMhCF4&controls=0&showinfo=0&autohide=1&modestbranding=1&iv_load_policy=3"
-          frameBorder="0"
-          allow="autoplay; encrypted-media"
-          allowFullScreen
-          style={{
-            minWidth: '100%',
-            minHeight: '100%',
-            width: 'auto',
-            height: 'auto',
-            aspectRatio: '16 / 9',
-          }}
-        ></iframe>
+      <div className="absolute inset-0 z-0">
         <div className="absolute inset-0 bg-black/10" />
       </div>
 
-      {/* Title */}
-      <div className="absolute top-8 left-8 z-20">
-        <h1 className="text-6xl font-extrabold text-white" style={{ textShadow: '0 0 10px rgba(255,255,255,0.7), 0 0 20px rgba(255,255,255,0.5), 0 0 30px rgba(255,255,255,0.3)' }}>
-            The Goon Chair
-        </h1>
-      </div>
-
-      {/* Content - All at bottom */}
       <div className="relative z-10 min-h-screen flex flex-col justify-end">
-        {/* All Controls at Bottom */}
-        <div className="pb-8 px-4 md:px-6 space-y-4">
-          {/* Control Buttons */}
-          <div className="flex gap-4 justify-center">
-            <ControlButton
-              label="Stop"
-              onClick={(e) => { handleButtonClick(e); handleMove('stop'); }}
-            />
+        <div className="pb-4 px-4 md:px-6 space-y-2.5">
+          <div className="mb-3">
+            <h1 className="text-xl md:text-2xl font-light text-white/80">The Goon Chair</h1>
+          </div>
+
+          <div className="flex flex-wrap gap-1.5 justify-center">
+            {[...Array(10)].map((_, i) => (
+              <SoundButton key={i} label={`Sound ${i + 1}`} onPlay={handleButtonClick} />
+            ))}
+          </div>
+
+          <div className="flex gap-2 justify-center">
+            <ControlButton label="Stop" onClick={handleStop} />
             <ControlButton
               label="Track Person"
               onClick={handleTrackPerson}
               active={trackPersonActive}
-            />
-            <ControlButton
-              label="Find Person"
-              onClick={handleFindPerson}
-              active={findPersonActive}
             />
             <ControlButton
               label="Gooning Machine"
@@ -139,7 +113,6 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Particle Effects */}
       {particles.map((particle) => (
         <ParticleEffect
           key={particle.id}
@@ -152,4 +125,3 @@ export default function Home() {
     </main>
   );
 }
-
